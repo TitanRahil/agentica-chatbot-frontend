@@ -6,7 +6,7 @@
 
     // 1. Configuration & Initialization
     const defaultConfig = {
-        apiUrl: "http://localhost:8000/chat", // Default local backend
+        apiUrl: "https://fastapi-chatbot-754369800088.europe-west1.run.app/chat", // Default local backend
         botName: "Agentica Assistant",
         themeColor: "#2563EB",
         welcomeMessage: "Hello! I am Agentica Virtual Assistant. How can I help you today?",
@@ -61,7 +61,7 @@
         .chat-window {
             width: 380px;
             height: 600px;
-            max-height: 80vh; /* Responsive height */
+            max-height: 80vh;
             background-color: white;
             border-radius: 12px;
             box-shadow: 0 5px 20px rgba(0, 0, 0, 0.15);
@@ -73,7 +73,7 @@
             pointer-events: none;
             transition: opacity 0.3s, transform 0.3s;
             position: absolute;
-            bottom: 80px; /* Above the button */
+            bottom: 80px;
             right: 0;
             border: 1px solid #e5e7eb;
         }
@@ -99,7 +99,7 @@
             font-size: 1.1rem;
             margin: 0;
         }
-        
+
         .chat-close-btn {
             background: none;
             border: none;
@@ -109,7 +109,7 @@
             opacity: 0.8;
             padding: 0;
         }
-        
+
         .chat-close-btn:hover {
             opacity: 1;
         }
@@ -158,6 +158,17 @@
             font-size: 0.85rem;
         }
 
+        .message.system-info {
+            align-self: center;
+            background-color: #eff6ff;
+            color: #1d4ed8;
+            border: 1px solid #bfdbfe;
+            font-size: 0.82rem;
+            text-align: center;
+            border-radius: 8px;
+            max-width: 90%;
+        }
+
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(5px); }
             to { opacity: 1; transform: translateY(0); }
@@ -168,6 +179,47 @@
             padding: 12px;
             border-top: 1px solid #e5e7eb;
             background-color: white;
+            display: flex;
+            gap: 8px;
+            flex-direction: column;
+        }
+
+        /* Lead flow step indicator */
+        .lead-step-bar {
+            display: none;
+            gap: 6px;
+            align-items: center;
+            padding: 0 2px 6px 2px;
+        }
+
+        .lead-step-bar.visible {
+            display: flex;
+        }
+
+        .lead-step-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #d1d5db;
+            transition: background-color 0.3s;
+            flex-shrink: 0;
+        }
+
+        .lead-step-dot.active {
+            background-color: ${config.themeColor};
+        }
+
+        .lead-step-dot.done {
+            background-color: #34d399;
+        }
+
+        .lead-step-label {
+            font-size: 0.75rem;
+            color: #6b7280;
+            margin-left: 4px;
+        }
+
+        .chat-input-row {
             display: flex;
             gap: 8px;
         }
@@ -186,6 +238,11 @@
             border-color: ${config.themeColor};
         }
 
+        .chat-input.lead-mode {
+            border-color: ${config.themeColor};
+            background-color: #eff6ff;
+        }
+
         .chat-send-btn {
             background: none;
             border: none;
@@ -202,7 +259,7 @@
         .chat-send-btn:hover {
             background-color: #f3f4f6;
         }
-        
+
         .chat-send-btn:disabled {
             color: #9ca3af;
             cursor: not-allowed;
@@ -282,8 +339,17 @@
                 <div class="message bot">${config.welcomeMessage}</div>
             </div>
             <div class="chat-input-area">
-                <input type="text" class="chat-input" placeholder="Type a message...">
-                <button class="chat-send-btn" disabled>${icons.send}</button>
+                <div class="lead-step-bar" id="lead-step-bar">
+                    <div class="lead-step-dot" id="dot-0"></div>
+                    <div class="lead-step-dot" id="dot-1"></div>
+                    <div class="lead-step-dot" id="dot-2"></div>
+                    <div class="lead-step-dot" id="dot-3"></div>
+                    <span class="lead-step-label" id="lead-step-label"></span>
+                </div>
+                <div class="chat-input-row">
+                    <input type="text" class="chat-input" id="chat-input" placeholder="Type a message...">
+                    <button class="chat-send-btn" id="chat-send-btn" disabled>${icons.send}</button>
+                </div>
             </div>
         </div>
         <button class="chat-toggle-btn">
@@ -299,12 +365,171 @@
         toggleBtn: shadow.querySelector('.chat-toggle-btn'),
         closeBtn: shadow.querySelector('.chat-close-btn'),
         messages: shadow.querySelector('.chat-messages'),
-        input: shadow.querySelector('.chat-input'),
-        sendBtn: shadow.querySelector('.chat-send-btn')
+        input: shadow.querySelector('#chat-input'),
+        sendBtn: shadow.querySelector('#chat-send-btn'),
+        stepBar: shadow.querySelector('#lead-step-bar'),
+        stepLabel: shadow.querySelector('#lead-step-label'),
+        dots: [0, 1, 2, 3].map(i => shadow.querySelector(`#dot-${i}`))
     };
 
     let isOpen = false;
     let isTyping = false;
+
+    // ── Lead Flow State Machine ──────────────────────────────────────────────
+    const LEAD_STEPS = [
+        {
+            field: 'name',
+            prompt: "Great! Before I connect you with our team, could I get your name?",
+            placeholder: "Enter your full name...",
+            label: "Name",
+            validate: (v) => v.trim().length >= 2 ? null : "Please enter your full name (at least 2 characters)."
+        },
+        {
+            field: 'email',
+            prompt: "Thanks! What's your email address?",
+            placeholder: "Enter your email...",
+            label: "Email",
+            validate: (v) => v.includes('@') && v.includes('.') ? null : "That doesn't look like a valid email. Please include @ and a domain (e.g. you@email.com)."
+        },
+        {
+            field: 'phone',
+            prompt: "Got it! What's the best phone number to reach you on?",
+            placeholder: "Enter your phone number...",
+            label: "Phone",
+            validate: (v) => {
+                const digits = v.replace(/[\s\-\+\(\)]/g, '');
+                return /^\d{7,15}$/.test(digits) ? null : "Please enter a valid phone number (digits only, 7-15 chars).";
+            }
+        },
+        {
+            field: 'requirement',
+            prompt: "Almost there! Briefly describe what you're looking to achieve or which product interests you.",
+            placeholder: "Describe your requirement...",
+            label: "Requirement",
+            validate: (v) => v.trim().length >= 3 ? null : "Please describe your requirement (at least 3 characters)."
+        }
+    ];
+
+    const leadFlow = {
+        active: false,
+        step: 0,
+        data: { name: '', email: '', phone: '', requirement: '' }
+    };
+
+    function startLeadFlow() {
+        leadFlow.active = true;
+        leadFlow.step = 0;
+        leadFlow.data = { name: '', email: '', phone: '', requirement: '' };
+        updateStepBar();
+        showLeadPrompt(0);
+    }
+
+    function updateStepBar() {
+        if (!leadFlow.active) {
+            elements.stepBar.classList.remove('visible');
+            elements.input.classList.remove('lead-mode');
+            return;
+        }
+        elements.stepBar.classList.add('visible');
+        elements.input.classList.add('lead-mode');
+
+        elements.dots.forEach((dot, i) => {
+            dot.classList.remove('active', 'done');
+            if (i < leadFlow.step) dot.classList.add('done');
+            else if (i === leadFlow.step) dot.classList.add('active');
+        });
+
+        const step = LEAD_STEPS[leadFlow.step];
+        elements.stepLabel.textContent = `Step ${leadFlow.step + 1}/4 — ${step.label}`;
+        elements.input.placeholder = step.placeholder;
+        elements.input.type = leadFlow.step === 2 ? 'tel' : (leadFlow.step === 1 ? 'email' : 'text');
+    }
+
+    function showLeadPrompt(stepIndex) {
+        const step = LEAD_STEPS[stepIndex];
+        // Small delay so it feels like the bot is "typing"
+        showTyping();
+        setTimeout(() => {
+            removeTyping();
+            appendMessage(step.prompt, 'bot');
+            elements.input.value = '';
+            elements.sendBtn.disabled = true;
+            elements.input.focus();
+        }, 700);
+    }
+
+    function handleLeadInput(value) {
+        const step = LEAD_STEPS[leadFlow.step];
+        const error = step.validate(value);
+
+        appendMessage(value, 'user');
+        elements.input.value = '';
+        elements.sendBtn.disabled = true;
+
+        if (error) {
+            showTyping();
+            setTimeout(() => {
+                removeTyping();
+                appendMessage(error, 'error');
+                setTimeout(() => {
+                    showTyping();
+                    setTimeout(() => {
+                        removeTyping();
+                        appendMessage(step.prompt, 'bot');
+                        elements.input.focus();
+                    }, 600);
+                }, 400);
+            }, 600);
+            return;
+        }
+
+        // Save the valid value
+        leadFlow.data[step.field] = value.trim();
+        leadFlow.step++;
+
+        if (leadFlow.step < LEAD_STEPS.length) {
+            updateStepBar();
+            showLeadPrompt(leadFlow.step);
+        } else {
+            // All steps complete — submit the lead
+            completeLead();
+        }
+    }
+
+    async function completeLead() {
+        leadFlow.active = false;
+        updateStepBar();
+        elements.input.placeholder = "Type a message...";
+        elements.input.type = "text";
+
+        showTyping();
+        setTimeout(async () => {
+            removeTyping();
+            appendMessage(
+                "Thank you! Your details have been received. Our team will reach out to you shortly.",
+                'bot'
+            );
+
+            // Submit lead to backend
+            try {
+                const leadUrl = config.apiUrl.replace('/chat', '/lead');
+                await fetchWithRetry(leadUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: leadFlow.data.name,
+                        email: leadFlow.data.email,
+                        phone: leadFlow.data.phone,
+                        requirement: leadFlow.data.requirement,
+                        page_url: window.location.href
+                    })
+                });
+            } catch (e) {
+                console.error('Failed to submit lead:', e);
+            }
+        }, 800);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     // 6. Session Management
     function getSessionId() {
@@ -341,11 +566,23 @@
     elements.input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey && !elements.sendBtn.disabled) {
             e.preventDefault();
-            sendMessage();
+            handleSubmit();
         }
     });
 
-    elements.sendBtn.addEventListener('click', sendMessage);
+    elements.sendBtn.addEventListener('click', handleSubmit);
+
+    // Unified submit handler — routes to lead flow or AI chat
+    function handleSubmit() {
+        const text = elements.input.value.trim();
+        if (!text || isTyping) return;
+
+        if (leadFlow.active) {
+            handleLeadInput(text);
+        } else {
+            sendMessage(text);
+        }
+    }
 
     // 8. Messaging Logic
     function appendMessage(text, type) {
@@ -405,8 +642,7 @@
         return tryFetch(0);
     }
 
-    async function sendMessage() {
-        const text = elements.input.value.trim();
+    async function sendMessage(text) {
         if (!text || isTyping) return;
 
         // User message
@@ -448,15 +684,12 @@
             const cleanReply = data.reply.replace(/\*\*/g, '').replace(/^\s*[\-\*]\s+/gm, '');
             appendMessage(cleanReply, 'bot');
 
-            // If the backend detected a lead, it will send a 'lead' object in the response
-            if (data.lead) {
-                console.log("Captured Lead:", data.lead);
-                // Send to the dedicated lead endpoint
-                await fetchWithRetry(`${config.apiUrl.replace('/chat', '/lead')}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data.lead)
-                });
+            // If backend detected buying intent, start the hardcoded lead flow
+            if (data.intent_detected) {
+                // Small pause before the flow starts so it feels natural
+                setTimeout(() => {
+                    startLeadFlow();
+                }, 500);
             }
 
         } catch (error) {
@@ -470,6 +703,5 @@
             appendMessage(errorMessage, 'error');
         }
     }
-
 
 })();
